@@ -5,6 +5,11 @@
 #include "platform.h"
 #include "fs/fs.h"
 
+#ifdef TARGET_WEB
+#include <emscripten.h>
+//TODO: Port over save functionality
+#endif
+
 u8* gOverrideEeprom = NULL;
 
 extern OSMgrArgs piMgrArgs;

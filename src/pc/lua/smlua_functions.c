@@ -794,7 +794,7 @@ int smlua_func_smlua_anim_util_register_animation(lua_State* L) {
  // console //
 /////////////
 
-int smlua_func_log_to_console(lua_State* L) {
+int Smlua_func_log_to_console(lua_State* L) {
     if (!smlua_functions_valid_param_range(L, 1, 2)) { return 0; }
 
     int paramCount = lua_gettop(L);
@@ -840,5 +840,5 @@ void smlua_bind_functions(void) {
     smlua_bind_function(L, "texture_override_reset", smlua_func_texture_override_reset);
     smlua_bind_function(L, "level_script_parse", smlua_func_level_script_parse);
     smlua_bind_function(L, "smlua_anim_util_register_animation", smlua_func_smlua_anim_util_register_animation);
-    smlua_bind_function(L, "log_to_console", smlua_func_log_to_console);
+    smlua_bind_function(L, "log_to_console", Smlua_func_log_to_console);
 }

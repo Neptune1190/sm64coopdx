@@ -742,7 +742,7 @@ void crash_handler_init(void) {
             break;
         }
 #ifndef OSX_BUILD
-        if (id == (s64)gPcDebug.tags[14]) { gDjuiRoot = NULL; }
+       // if (id == (s64)gPcDebug.tags[14]) { gDjuiRoot = NULL; }
 #endif
         tag++;
     }

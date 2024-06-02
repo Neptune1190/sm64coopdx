@@ -27,6 +27,10 @@ TARGET_N64 = 0
 # Build and optimize for Raspberry Pi(s)
 TARGET_RPI ?= 0
 
+# EXPERIMENTAL
+# Build for web browsers 
+TARGET_WEB ?= 0
+
 # Makeflag to enable OSX fixes
 OSX_BUILD ?= 0
 
@@ -34,10 +38,20 @@ OSX_BUILD ?= 0
 TARGET_ARCH ?= native
 TARGET_BITS ?= 0
 
+# Enable immediate load by default
+IMMEDIATELOAD ?= 1
+# Enable better camera by default
+BETTERCAMERA ?= 1
+# Enable no drawing distance by default
+NODRAWINGDISTANCE ?= 1
 # Disable texture fixes by default (helps with them purists)
 TEXTURE_FIX ?= 0
-# Enable level texture enhancements by default (Castle Grounds and Castle Courtyard recolorable texture hills)
-ENHANCE_LEVEL_TEXTURES ?= 1
+# Enable extended options menu by default
+EXT_OPTIONS_MENU ?= 1
+# Disable text-based save-files by default
+TEXTSAVES ?= 0
+# Load resources from external files
+EXTERNAL_DATA ?= 0
 # Enable Discord Game SDK (used for Discord invites)
 DISCORD_SDK ?= 1
 # Enable CoopNet SDK (used for CoopNet server hosting)
@@ -59,8 +73,8 @@ HEADLESS ?= 0
 ICON ?= 1
 # Use .app (mac only)
 USE_APP ?= 1
-
 # Various workarounds for weird toolchains
+
 NO_BZERO_BCOPY ?= 0
 NO_LDIV ?= 0
 
@@ -74,6 +88,11 @@ WINDOW_API ?= SDL2
 AUDIO_API ?= SDL2
 # Controller backends (can have multiple, space separated): SDL2, SDL1
 CONTROLLER_API ?= SDL2
+
+# Misc settings for EXTERNAL_DATA
+
+BASEDIR ?= res
+BASEPACK ?= base.zip
 
 # Automatic settings for PC port(s)
 
@@ -90,8 +109,13 @@ dev:; @$(MAKE) DEVELOPMENT=1
 
 # COMPILER - selects the C compiler to use
 #   gcc - uses the GNU C Compiler
-COMPILER = gcc
-$(eval $(call validate-option,COMPILER,ido gcc clang))
+#   emscripten - uses Emscripten
+ifeq ($(TARGET_WEB), 1)
+  COMPILER = emscripten
+else
+  COMPILER = gcc
+endif
+$(eval $(call validate-option,COMPILER,ido gcc clang emscripten))
 
 # Attempt to detect OS
 
@@ -105,8 +129,10 @@ else
   endif
 endif
 
-ifeq ($(HOST_OS),Windows)
-  WINDOWS_BUILD := 1
+ifeq ($(TARGET_WEB),0) # Done to mirror the sm64ex implementation, may not be necessary here but :P
+  ifeq ($(HOST_OS),Windows)
+    WINDOWS_BUILD := 1
+  endif
 endif
 
 # MXE overrides
@@ -252,6 +278,10 @@ else
   PROF_FLAGS :=
 endif
 
+# ifeq ($(TARGET_WEB),1)
+#   OPT_FLAGS := -O2 -g4 --source-map-base http://localhost:8080/
+# endif
+
 ifeq ($(TARGET_RPI),1)
   $(info Compiling for Raspberry Pi)
   DISCORD_SDK := 0
@@ -306,7 +336,7 @@ TARGET := sm64.$(VERSION)
 #   f3d_new - default for EU and Shindou versions
 #   f3dex   -
 #   f3dex2  -
-#   f3dex2e - default for PC Port
+#   f3dex2e -
 #   f3dzex  - newer, experimental microcode used in Animal Crossing
 $(eval $(call validate-option,GRUCODE,f3d_old f3dex f3dex2 f3dex2e f3d_new f3dzex))
 
@@ -382,11 +412,28 @@ endif
 
 ifeq ($(NON_MATCHING),1)
   DEFINES += NON_MATCHING=1 AVOID_UB=1
+  COMPARE := 0
 endif
+
+
+# COMPARE - whether to verify the SHA-1 hash of the ROM after building
+#   1 - verifies the SHA-1 hash of the selected version of the game
+#   0 - does not verify the hash
+COMPARE ?= 1
+$(eval $(call validate-option,COMPARE,0 1))
 
 ifeq ($(OSX_BUILD),0)
 	USE_APP := 0
+else ifeq ($(shell uname -m),arm64)
+  DISCORD_SDK := 0
 endif
+
+TARGET_STRING := sm64.$(VERSION).$(GRUCODE)
+# If non-default settings were chosen, disable COMPARE
+ifeq ($(filter $(TARGET_STRING), sm64.jp.f3d_old sm64.us.f3d_old sm64.eu.f3d_new sm64.sh.f3d_new),)
+  COMPARE := 0
+endif
+
 
 # Whether to hide commands or not
 VERBOSE ?= 0
@@ -402,6 +449,12 @@ ifeq ($(filter clean distclean,$(MAKECMDGOALS)),)
   $(info ==== Build Options ====)
   $(info Version:        $(VERSION))
   $(info Microcode:      $(GRUCODE))
+  $(info Target:         $(TARGET))
+  ifeq ($(COMPARE),1)
+    $(info Compare ROM:    yes)
+  else
+    $(info Compare ROM:    no)
+  endif
   ifeq ($(NON_MATCHING),1)
     $(info Build Matching: no)
   else
@@ -450,6 +503,19 @@ endif
 # Extra Source Files                                                           #
 #==============================================================================#
 
+# Luigi and wario sounds don't work on 32-bit right now
+# And the audio code is so terrible I don't care enough to figure it out at the moment
+ifeq ($(TARGET_BITS), 32)
+  _ := $(shell rm -rf sound/samples/sfx_custom_luigi/*.aiff)
+  _ := $(shell rm -rf sound/samples/sfx_custom_luigi_peach/*.aiff)
+  _ := $(shell rm -rf sound/samples/sfx_custom_wario/*.aiff)
+  _ := $(shell rm -rf sound/samples/sfx_custom_wario_peach/*.aiff)
+
+# Copy missing character sounds from mario sound banks
+_ := $(shell $(PYTHON) $(TOOLS_DIR)/copy_mario_sounds.py)
+
+endif
+
 # Copy missing instrument samples from the music sound banks
 _ := $(shell $(PYTHON) $(TOOLS_DIR)/copy_extended_sounds.py)
 
@@ -459,16 +525,25 @@ _ := $(shell $(PYTHON) $(TOOLS_DIR)/copy_extended_sounds.py)
 
 BUILD_DIR_BASE := build
 # BUILD_DIR is the location where all build artifacts are placed
-BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_pc
+ifeq ($(TARGET_WEB),1)
+  BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_web
+else
+  BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_pc
+endif
 
-ifeq ($(WINDOWS_BUILD),1)
-	EXE := $(BUILD_DIR)/sm64coopdx.exe
-else # Linux builds/binary namer
-	ifeq ($(TARGET_RPI),1)
-		EXE := $(BUILD_DIR)/sm64coopdx.arm
-	else
-		EXE := $(BUILD_DIR)/sm64coopdx
-	endif
+ifeq ($(TARGET_WEB),1)
+  EXE := $(BUILD_DIR)/$(TARGET_STRING).html
+  else
+  ifeq ($(WINDOWS_BUILD),1)
+	  EXE := $(BUILD_DIR)/$(TARGET_STRING).exe
+
+    else # Linux builds/binary namer
+	  ifeq ($(TARGET_RPI),1)
+		  EXE := $(BUILD_DIR)/$(TARGET_STRING).arm
+	  else
+		  EXE := $(BUILD_DIR)/$(TARGET_STRING)
+	  endif
+  endif
 endif
 
 ELF            := $(BUILD_DIR)/$(TARGET).elf
@@ -574,11 +649,7 @@ ifeq ($(DISCORD_SDK), 1)
     # HACKY! Instead of figuring out all of the dynamic library linking madness...
     # I copied the library and gave it two names.
     # This really shouldn't be required, but I got tired of trying to do it the "right way"
-    ifeq ($(shell uname -m),arm64) # A hacky way of determining if the user is running on Apple Silicon hardware
-      DISCORD_SDK_LIBS := lib/discordsdk/aarch64/discord_game_sdk.dylib lib/discordsdk/aarch64/libdiscord_game_sdk.dylib
-    else
-      DISCORD_SDK_LIBS := lib/discordsdk/discord_game_sdk.dylib lib/discordsdk/libdiscord_game_sdk.dylib
-    endif
+    DISCORD_SDK_LIBS := lib/discordsdk/discord_game_sdk.dylib lib/discordsdk/libdiscord_game_sdk.dylib
   else
     DISCORD_SDK_LIBS := lib/discordsdk/libdiscord_game_sdk.so
   endif
@@ -615,7 +686,7 @@ _ := $(shell rm -rf ./$(BUILD_DIR)/$(LANG_DIR))
 MOD_DIR := mods
 
 # Remove old mod dir
-_ := $(shell $(PYTHON) $(TOOLS_DIR)/remove_built_in_mods.py)
+_ := $(shell rm -rf ./$(BUILD_DIR)/$(MOD_DIR))
 
 # Automatic dependency files
 DEP_FILES := $(O_FILES:.o=.d) $(ULTRA_O_FILES:.o=.d) $(GODDARD_O_FILES:.o=.d) $(BUILD_DIR)/$(LD_SCRIPT).d
@@ -645,7 +716,15 @@ ifeq ($(OSX_BUILD),1)
   AS := i686-w64-mingw32-as
 endif
 
-ifeq ($(WINDOWS_AUTO_BUILDER),1)
+ifeq ($(COMPILER),emscripten)
+  # This is horrific practice. Move these to other vars when i'm sure they won't screw up the compile
+  CC := emcc -s USE_SDL=2 -s USE_ZLIB=1 -s USE_WEBGL2=1 -DUSE_GLES -s INITIAL_MEMORY=83886080 -s ERROR_ON_UNDEFINED_SYMBOLS=0
+  CXX := em++ -s USE_SDL=2 -s USE_ZLIB=1 -s USE_WEBGL2=1 -DUSE_GLES -s INITIAL_MEMORY=83886080 -s ERROR_ON_UNDEFINED_SYMBOLS=0
+  CPP := emcc -s USE_SDL=2 -s USE_ZLIB=1 -s USE_WEBGL2=1 -DUSE_GLES -s INITIAL_MEMORY=83886080 -s ERROR_ON_UNDEFINED_SYMBOLS=0
+
+  EXTRA_CFLAGS += -w 
+
+else ifeq ($(WINDOWS_AUTO_BUILDER),1)
   CC      := cc
   CXX     := g++
 else ifeq ($(COMPILER),gcc)
@@ -729,6 +808,10 @@ else
   TARGET_CFLAGS += $(EXTRA_CFLAGS)
 endif
 
+ifeq ($(TARGET_WEB),1)
+  TARGET_CFLAGS  += -DTARGET_WEB 
+endif
+
 
 INCLUDE_DIRS := include $(BUILD_DIR) $(BUILD_DIR)/include src .
 ifeq ($(TARGET_N64),1)
@@ -763,7 +846,7 @@ else ifeq ($(findstring SDL,$(WINDOW_API)),SDL)
   else ifeq ($(TARGET_RPI),1)
     BACKEND_LDFLAGS += -lGLESv2
   else ifeq ($(OSX_BUILD),1)
-    BACKEND_LDFLAGS += -framework OpenGL `pkg-config --libs glew`
+    BACKEND_LDFLAGS += -framework OpenGL `pkg-config --libs glew` -ld_classic
     EXTRA_CPP_FLAGS += -stdlib=libc++ -std=c++0x
   else
     BACKEND_LDFLAGS += -lGL
@@ -814,6 +897,7 @@ DEF_INC_CFLAGS := $(foreach i,$(INCLUDE_DIRS),-I$(i)) $(C_DEFINES)
 # Check code syntax with host compiler
 CC_CHECK := $(CC)
 
+
 ifeq ($(WINDOWS_BUILD),1)
   CC_CHECK_CFLAGS := -fsyntax-only -fsigned-char $(BACKEND_CFLAGS) $(DEF_INC_CFLAGS) -Wall -Wextra $(TARGET_CFLAGS) -DWINSOCK
   CFLAGS := $(OPT_FLAGS) $(DEF_INC_CFLAGS) $(BACKEND_CFLAGS) $(TARGET_CFLAGS) -fno-strict-aliasing -fwrapv -DWINSOCK
@@ -855,10 +939,17 @@ ifeq ($(TARGET_N64),1)
   endif
 endif
 
-ifeq ($(WINDOWS_BUILD),1)
-  LDFLAGS := $(BITS) -march=$(TARGET_ARCH) -Llib -lpthread $(BACKEND_LDFLAGS) -static -mconsole
+# Reusing code from sm64ex
+ifeq ($(TARGET_WEB),1)
+  LDFLAGS := -lm $(BACKEND_LDFLAGS) -no-pie -lSDL2 -lpthread --verbose -lm -lGL -no-pie -s TOTAL_MEMORY=70MB -g4 --source-map-base http://localhost:8080/ -s "EXPORTED_RUNTIME_METHODS=['callMain']" -sMAX_WEBGL_VERSION=2
+
+else ifeq ($(WINDOWS_BUILD),1)
+  LDFLAGS := $(BITS) -march=$(TARGET_ARCH) -Llib -lpthread $(BACKEND_LDFLAGS) -static
   ifeq ($(CROSS),)
     LDFLAGS += -no-pie
+  endif
+  ifeq ($(WINDOWS_CONSOLE),1)
+    LDFLAGS += -mconsole
   endif
 else ifeq ($(TARGET_RPI),1)
   LDFLAGS := $(OPT_FLAGS) -lm $(BACKEND_LDFLAGS) -no-pie
@@ -902,17 +993,12 @@ endif
 # Coop specific libraries
 
 # Zlib
-LDFLAGS += -lz
-
-# Update checker library
-ifeq ($(WINDOWS_BUILD),1)
-  LDFLAGS += -lwininet
-else
-  LDFLAGS += -lcurl
-endif
+# LDFLAGS += -lz
 
 # Lua
-ifeq ($(WINDOWS_BUILD),1)
+ifeq ($(TARGET_WEB), 1)
+  LDFLAGS += -Llib/lua/emscripten -l:liblua53.a
+else ifeq ($(WINDOWS_BUILD),1)
   ifeq ($(TARGET_BITS), 32)
     LDFLAGS += -Llib/lua/win32 -l:liblua53.a
   else
@@ -934,10 +1020,14 @@ else
   LDFLAGS += -Llib/lua/linux -l:liblua53.a -ldl
 endif
 
-# CoopNet
+# coopnet
 COOPNET_LIBS :=
 ifeq ($(COOPNET),1)
-  ifeq ($(WINDOWS_BUILD),1)
+  ifeq ($(TARGET_WEB), 1)
+    # RECOMPILE THIS LATER! I screwed up and the archive isn't actually compiled with emcc.
+    # also gotta figure out libcoopnet later
+    LDFLAGS += -Llib/coopnet/emscripten -l:libcoopnet.a -l:libjuice.a
+  else ifeq ($(WINDOWS_BUILD),1)
     ifeq ($(TARGET_BITS), 32)
       LDFLAGS += -Llib/coopnet/win32 -l:libcoopnet.a -l:libjuice.a -lbcrypt -lws2_32 -liphlpapi
     else
@@ -964,8 +1054,11 @@ ifeq ($(COOPNET),1)
   endif
 endif
 
+## CLEANSE THY INCLUDES, BEGONE!
+ifeq ($(TARGET_WEB),1)
+
 # Network/Discord/Bass (ugh, needs cleanup)
-ifeq ($(WINDOWS_BUILD),1)
+else ifeq ($(WINDOWS_BUILD),1)
   LDFLAGS += -L"ws2_32" -lwsock32
   ifeq ($(DISCORD_SDK),1)
     LDFLAGS += -Wl,-Bdynamic -L./lib/discordsdk/ -L./lib/bass/ -ldiscord_game_sdk -lbass -lbass_fx -Wl,-Bstatic
@@ -991,6 +1084,11 @@ export LANG := C
 # Extra CC Flags                                                               #
 #==============================================================================#
 
+# Identify that this is a coop build so that one patch can be applied to EX
+# and/or COOP. They can choose to ifdef entity synchronization out.
+CC_CHECK_CFLAGS += -DCOOP
+CFLAGS += -DCOOP
+
 # Enforce -Werror in strict mode
 ifeq ($(STRICT),1)
   CC_CHECK_CFLAGS += -Werror
@@ -1005,11 +1103,35 @@ endif
 
 # Check for enhancement options
 
+# Check for immediate load option
+ifeq ($(IMMEDIATELOAD),1)
+  CC_CHECK_CFLAGS += -DIMMEDIATELOAD
+  CFLAGS += -DIMMEDIATELOAD
+endif
+
 # Check for docker build workaround option
 ifeq ($(DOCKERBUILD),1)
   CC_CHECK_CFLAGS += -DDOCKERBUILD
   CFLAGS += -DDOCKERBUILD
 endif
+
+# Check for Puppycam option
+ifeq ($(BETTERCAMERA),1)
+  CC_CHECK_CFLAGS += -DBETTERCAMERA
+  CFLAGS += -DBETTERCAMERA
+  EXT_OPTIONS_MENU := 1
+endif
+
+#ifeq ($(TEXTSAVES),1)
+#  CC_CHECK_CFLAGS += -DTEXTSAVES
+#  CFLAGS += -DTEXTSAVES
+#endif
+
+# Check for no drawing distance option
+#ifeq ($(NODRAWINGDISTANCE),1)
+  CC_CHECK_CFLAGS += -DNODRAWINGDISTANCE
+  CFLAGS += -DNODRAWINGDISTANCE
+#endif
 
 # Check for Discord SDK option
 ifeq ($(DISCORD_SDK),1)
@@ -1018,7 +1140,9 @@ ifeq ($(DISCORD_SDK),1)
 endif
 
 # Check for COOPNET option
-ifeq ($(COOPNET),1)
+ifeq ($(TARGET_WEB),1)
+
+else ifeq ($(COOPNET),1)
   CC_CHECK_CFLAGS += -DCOOPNET
   CFLAGS += -DCOOPNET
 endif
@@ -1041,10 +1165,10 @@ ifeq ($(TEXTURE_FIX),1)
   CFLAGS += -DTEXTURE_FIX
 endif
 
-# Check for enhance level textures option
-ifeq ($(ENHANCE_LEVEL_TEXTURES),1)
-  CC_CHECK_CFLAGS += -DENHANCE_LEVEL_TEXTURES
-  CFLAGS += -DENHANCE_LEVEL_TEXTURES
+# Check for extended options menu option
+ifeq ($(EXT_OPTIONS_MENU),1)
+  CC_CHECK_CFLAGS += -DEXT_OPTIONS_MENU
+  CFLAGS += -DEXT_OPTIONS_MENU
 endif
 
 # Check for no bzero/bcopy workaround option
@@ -1063,6 +1187,16 @@ endif
 ifeq ($(LEGACY_GL),1)
   CC_CHECK_CFLAGS += -DLEGACY_GL
   CFLAGS += -DLEGACY_GL
+endif
+
+# Load external textures
+ifeq ($(EXTERNAL_DATA),1)
+  CC_CHECK_CFLAGS += -DEXTERNAL_DATA -DFS_BASEDIR="\"$(BASEDIR)\""
+  CFLAGS += -DEXTERNAL_DATA -DFS_BASEDIR="\"$(BASEDIR)\""
+  # tell skyconv to write names instead of actual texture data and save the split tiles so we can use them later
+  SKYTILE_DIR := $(BUILD_DIR)/textures/skybox_tiles
+  SKYCONV_ARGS := --store-names --write-tiles "$(SKYTILE_DIR)"
+  $(shell mkdir -p $(SKYTILE_DIR))
 endif
 
 #==============================================================================#
@@ -1117,6 +1251,40 @@ endef
 # Main Targets                                                                 #
 #==============================================================================#
 
+
+
+ifeq ($(EXTERNAL_DATA),1)
+
+BASEPACK_PATH := $(BUILD_DIR)/$(BASEDIR)/$(BASEPACK)
+BASEPACK_LST := $(BUILD_DIR)/basepack.lst
+
+# depend on resources as well
+all: $(BASEPACK_PATH)
+
+# phony target for building resources
+res: $(BASEPACK_PATH)
+
+# prepares the basepack.lst
+$(BASEPACK_LST): $(EXE)
+	@$(PRINT) "$(GREEN)Making basepack list.$(NO_COL)\n"
+	@mkdir -p $(BUILD_DIR)/$(BASEDIR)
+	@echo -n > $(BASEPACK_LST)
+	@echo "$(BUILD_DIR)/sound/bank_sets sound/bank_sets" >> $(BASEPACK_LST)
+	@echo "$(BUILD_DIR)/sound/sequences.bin sound/sequences.bin" >> $(BASEPACK_LST)
+	@echo "$(BUILD_DIR)/sound/sound_data.ctl sound/sound_data.ctl" >> $(BASEPACK_LST)
+	@echo "$(BUILD_DIR)/sound/sound_data.tbl sound/sound_data.tbl" >> $(BASEPACK_LST)
+	@$(foreach f, $(wildcard $(SKYTILE_DIR)/*), echo $(f) gfx/$(f:$(BUILD_DIR)/%=%) >> $(BASEPACK_LST);)
+	@find actors -name \*.png -exec echo "{} gfx/{}" >> $(BASEPACK_LST) \;
+	@find levels -name \*.png -exec echo "{} gfx/{}" >> $(BASEPACK_LST) \;
+	@find textures -name \*.png -exec echo "{} gfx/{}" >> $(BASEPACK_LST) \;
+
+# prepares the resource ZIP with base data
+$(BASEPACK_PATH): $(BASEPACK_LST)
+	@$(PRINT) "$(GREEN)Packing basepack zip file.$(NO_COL)\n"
+	$(V)$(PYTHON) $(TOOLS_DIR)/mkzip.py $(BASEPACK_LST) $(BASEPACK_PATH)
+
+endif
+
 #all: $(ROM)
 all: $(EXE)
 
@@ -1124,6 +1292,11 @@ ifeq ($(WINDOWS_BUILD),1)
 exemap: $(EXE)
 	$(V)$(OBJDUMP) -t $(EXE) > $(BUILD_DIR)/coop.map
 all: exemap
+endif
+
+ifeq ($(COMPARE),1)
+	@$(PRINT) "$(GREEN)Checking if ROM matches.. $(NO_COL)\n"
+	@$(SHA1SUM) --quiet -c $(TARGET).sha1 && $(PRINT) "$(TARGET): $(GREEN)OK$(NO_COL)\n" || ($(PRINT) "$(YELLOW)Building the ROM file has succeeded, but does not match the original ROM.\nThis is expected, and not an error, if you are making modifications.\nTo silence this message, use 'make COMPARE=0.' $(NO_COL)\n" && false)
 endif
 
 clean:
@@ -1159,7 +1332,7 @@ $(BUILD_DIR)/$(LANG_DIR):
 	@$(CP) -f -r $(LANG_DIR) $(BUILD_DIR)
 
 $(BUILD_DIR)/$(MOD_DIR):
-	$(CP) -f -r $(MOD_DIR) $(BUILD_DIR)
+	@$(CP) -f -r $(MOD_DIR) $(BUILD_DIR)
 
 # Extra object file dependencies
 
@@ -1229,24 +1402,33 @@ $(BUILD_DIR)/src/game/ingame_menu.o: $(BUILD_DIR)/include/text_strings.h
 #==============================================================================#
 TEXTURE_ENCODING := u8
 
-# Convert PNGs to RGBA32, RGBA16, IA16, IA8, IA4, IA1, I8, I4 binary files
-$(BUILD_DIR)/%: %.png
+ifeq ($(EXTERNAL_DATA),1)
+  $(BUILD_DIR)/%: %.png
+	$(call print,Dummying:,$<,$@)
+	$(V)$(PYTHON) $(TOOLS_DIR)/zeroterm.py "$(patsubst %.png,%,$^)" > $@
+else
+  # Convert PNGs to RGBA32, RGBA16, IA16, IA8, IA4, IA1, I8, I4 binary files
+  $(BUILD_DIR)/%: %.png
 	$(call print,Converting:,$<,$@)
 	$(V)$(N64GRAPHICS) -s raw -i $@ -g $< -f $(lastword $(subst ., ,$@))
 
-$(BUILD_DIR)/%.inc.c: %.png
+  $(BUILD_DIR)/%.inc.c: %.png
 	$(call print,Converting:,$<,$@)
 	$(V)$(N64GRAPHICS) -s $(TEXTURE_ENCODING) -i $@ -g $< -f $(lastword ,$(subst ., ,$(basename $<)))
+endif
 
-# Color Index CI8
-$(BUILD_DIR)/%.ci8: %.ci8.png
+
+ifeq ($(EXTERNAL_DATA),0)
+  # Color Index CI8
+  $(BUILD_DIR)/%.ci8: %.ci8.png
 	$(call print,Converting:,$<,$@)
 	$(V)$(N64GRAPHICS_CI) -i $@ -g $< -f ci8
 
-# Color Index CI4
-$(BUILD_DIR)/%.ci4: %.ci4.png
+  # Color Index CI4
+  $(BUILD_DIR)/%.ci4: %.ci4.png
 	$(call print,Converting:,$<,$@)
 	$(V)$(N64GRAPHICS_CI) -i $@ -g $< -f ci4
+endif
 
 #==============================================================================#
 # Compressed Segment Generation                                                #
@@ -1341,6 +1523,12 @@ $(SOUND_BIN_DIR)/%.m64: $(SOUND_BIN_DIR)/%.o
 #==============================================================================#
 # Generated Source Code Files                                                  #
 #==============================================================================#
+
+ifeq ($(EXTERNAL_DATA),1)
+  $(SOUND_BIN_DIR)/%.inc.c: $(SOUND_BIN_DIR)/%
+	$(call print,Dummying:,$<,$@)
+	$(V)$(PYTHON) $(TOOLS_DIR)/zeroterm.py "$(patsubst $(BUILD_DIR)/%,%,$^)" | hexdump -v -e '1/1 "0x%X,"' > $@
+endif
 
 # Convert binary file to a comma-separated list of byte values for inclusion in C code
 $(BUILD_DIR)/%.inc.c: $(BUILD_DIR)/%
@@ -1516,8 +1704,9 @@ ifeq ($(TARGET_N64),1)
 	$(OBJDUMP) -D $< > $@
 else
   $(EXE): $(O_FILES) $(MIO0_FILES:.mio0=.o) $(ULTRA_O_FILES) $(GODDARD_O_FILES) $(BUILD_DIR)/$(RPC_LIBS) $(BUILD_DIR)/$(DISCORD_SDK_LIBS) $(BUILD_DIR)/$(BASS_LIBS) $(BUILD_DIR)/$(COOPNET_LIBS) $(BUILD_DIR)/$(LANG_DIR) $(BUILD_DIR)/$(MOD_DIR)
-	@$(PRINT) "$(GREEN)Linking executable: $(BLUE)$@ $(NO_COL)\n"
+	@$(PRINT) "$(GREEN)Linking executable: $(BLUE)$@ $(NO_COL)\n $(V)$(LD) $(PROF_FLAGS) -L $(BUILD_DIR) -o $@ $(O_FILES) $(ULTRA_O_FILES) $(GODDARD_O_FILES) $(LDFLAGS)\n"
 	$(V)$(LD) $(PROF_FLAGS) -L $(BUILD_DIR) -o $@ $(O_FILES) $(ULTRA_O_FILES) $(GODDARD_O_FILES) $(LDFLAGS)
+  
 endif
 
 .PHONY: all clean distclean default diff test load libultra res
@@ -1525,20 +1714,20 @@ endif
 # with no prerequisites, .SECONDARY causes no intermediate target to be removed
 .SECONDARY:
 
-APP_DIR = ./sm64coopdx.app
+APP_DIR = ./sm64ex-coop.app
 APP_CONTENTS_DIR = $(APP_DIR)/Contents
 APP_MACOS_DIR = $(APP_CONTENTS_DIR)/MacOS
 
 all:
 	@if [ "$(USE_APP)" = "0" ]; then \
-		rm -rf build/us_pc/sm64coopdx.app; \
-  else \
-		$(PRINT) "$(GREEN)Creating App Bundle: $(BLUE)build/us_pc/sm64coopdx.app\n"; \
+		rm -rf build/us_pc/sm64ex-coop.app; \
+    else \
+		$(PRINT) "$(GREEN)Creating App Bundle: $(BLUE)build/us_pc/sm64ex-coop.app\n"; \
 		rm -rf $(APP_DIR); \
-		rm -rf build/us_pc/sm64coopdx.app; \
+		rm -rf build/us_pc/sm64ex-coop.app; \
 		mkdir -p $(APP_MACOS_DIR); \
 		mkdir -p $(APP_CONTENTS_DIR)/Resources; \
-		mv build/us_pc/sm64coopdx $(APP_MACOS_DIR)/sm64coopdx; \
+		mv build/us_pc/sm64.us.f3dex2e $(APP_MACOS_DIR)/sm64ex-coop; \
 		cp -r build/us_pc/* $(APP_MACOS_DIR); \
 		cp res/icon.icns $(APP_CONTENTS_DIR)/Resources/icon.icns; \
 		echo "APPL????" > $(APP_CONTENTS_DIR)/PkgInfo; \
@@ -1547,19 +1736,19 @@ all:
 		echo '<plist version="1.0">' >> $(APP_CONTENTS_DIR)/Info.plist; \
 		echo '<dict>' >> $(APP_CONTENTS_DIR)/Info.plist; \
 		echo '    <key>CFBundleExecutable</key>' >> $(APP_CONTENTS_DIR)/Info.plist; \
-		echo '    <string>sm64coopdx</string>' >> $(APP_CONTENTS_DIR)/Info.plist; \
+		echo '    <string>sm64ex-coop</string>' >> $(APP_CONTENTS_DIR)/Info.plist; \
 		echo '    <key>CFBundleIconFile</key>' >> $(APP_CONTENTS_DIR)/Info.plist; \
 		echo '    <string>icon</string>' >> $(APP_CONTENTS_DIR)/Info.plist; \
 		echo '    <key>CFBundleIconName</key>' >> $(APP_CONTENTS_DIR)/Info.plist; \
 		echo '    <string>AppIcon</string>' >> $(APP_CONTENTS_DIR)/Info.plist; \
 		echo '    <key>CFBundleDisplayName</key>' >> $(APP_CONTENTS_DIR)/Info.plist; \
-		echo '    <string>sm64coopdx</string>' >> $(APP_CONTENTS_DIR)/Info.plist; \
+		echo '    <string>sm64ex-coop</string>' >> $(APP_CONTENTS_DIR)/Info.plist; \
 		echo '    <!-- Add other keys and values here -->' >> $(APP_CONTENTS_DIR)/Info.plist; \
 		echo '</dict>' >> $(APP_CONTENTS_DIR)/Info.plist; \
 		echo '</plist>' >> $(APP_CONTENTS_DIR)/Info.plist; \
-		chmod +x $(APP_MACOS_DIR)/sm64coopdx; \
+		chmod +x $(APP_MACOS_DIR)/sm64ex-coop; \
 		mv $(APP_DIR) build/us_pc/; \
-  fi
+    fi
 
 # Remove built-in rules, to improve performance
 MAKEFLAGS += --no-builtin-rules

@@ -8,6 +8,11 @@
 
 #include "pc/lua/smlua.h"
 
+#ifdef TARGET_WEB
+#include <emscripten.h>
+#include <emscripten/html5.h>
+#endif
+
 #include "game/memory.h"
 #include "audio/external.h"
 
@@ -31,15 +36,15 @@
 #include "game/main.h"
 #include "game/rumble_init.h"
 
-#include "include/bass/bass.h"
-#include "include/bass/bass_fx.h"
-#include "src/bass_audio/bass_audio_helpers.h"
-#include "pc/lua/utils/smlua_audio_utils.h"
+// CLEANSE THY BASS
+// #include "include/bass/bass.h"
+// #include "include/bass/bass_fx.h"
+// #include "src/bass_audio/bass_audio_helpers.h"
+// #include "pc/lua/utils/smlua_audio_utils.h"
 
 #include "pc/network/version.h"
 #include "pc/network/socket/domain_res.h"
 #include "pc/network/network_player.h"
-#include "pc/update_checker.h"
 #include "pc/djui/djui.h"
 #include "pc/djui/djui_unicode.h"
 #include "pc/djui/djui_panel.h"
@@ -55,10 +60,6 @@
 
 #ifdef DISCORD_SDK
 #include "pc/discord/discord.h"
-#endif
-
-#if defined(_WIN32) || defined(_WIN64)
-#include <windows.h>
 #endif
 
 OSMesg D_80339BEC;
@@ -162,22 +163,33 @@ void produce_interpolation_frames_and_delay(void) {
     u64 frames = 0;
     f64 curTime = clock_elapsed_f64();
 
+    #ifndef TARGET_WEB
     gRenderingInterpolated = true;
+    #else
+    gRenderingInterpolated = false;
+    #endif
 
     // sanity check target time to deal with hangs and such
     if (fabs(sFrameTargetTime - curTime) > 1) { sFrameTargetTime = curTime - 0.01f; }
 
     // interpolate and render
+    // this causes massive performance issues on web versions. Begone
+    #ifndef TARGET_WEB
     while ((curTime = clock_elapsed_f64()) < sFrameTargetTime) {
+    #endif
         gfx_start_frame();
         f32 delta = MIN((curTime - sFrameTimeStart) / (sFrameTargetTime - sFrameTimeStart), 1);
         gRenderingDelta = delta;
+        #ifndef TARGET_WEB
         if (!gSkipInterpolationTitleScreen && (configFrameLimit > 30 || configUncappedFramerate)) { patch_interpolations(delta); }
+        #endif
         send_display_list(gGfxSPTask);
         gfx_end_frame();
 
         // delay
+        #ifndef TARGET_WEB
         if (!configUncappedFramerate) {
+        #endif
             f64 targetDelta = 1.0 / (f64) configFrameLimit;
             f64 now = clock_elapsed_f64();
             f64 actualDelta = now - curTime;
@@ -185,10 +197,14 @@ void produce_interpolation_frames_and_delay(void) {
                 f64 delay = ((targetDelta - actualDelta) * 1000.0);
                 WAPI.delay((u32) delay);
             }
+        #ifndef TARGET_WEB
         }
+        #endif
 
         frames++;
+    #ifndef TARGET_WEB
     }
+    #endif
 
     static u64 sFramesSinceFpsUpdate = 0;
     static u64 sLastFpsUpdateTime = 0;
@@ -239,20 +255,19 @@ void produce_one_frame(void) {
 }
 
 void audio_shutdown(void) {
-    audio_custom_shutdown();
-    if (audio_api) {
-        if (audio_api->shutdown) audio_api->shutdown();
-        audio_api = NULL;
-    }
+    // CLEANSE THY BASS
+    // audio_custom_shutdown();
+    // if (audio_api) {
+    //     if (audio_api->shutdown) audio_api->shutdown();
+    //     audio_api = NULL;
+    // }
 }
 
 void game_deinit(void) {
-    if (gGameInited) {
-        smlua_call_event_hooks(HOOK_ON_EXIT);
-        configfile_save(configfile_name());
-    }
+    if (gGameInited) configfile_save(configfile_name());
     controller_shutdown();
-    audio_custom_shutdown();
+    // CLEANSE THY BASS
+    // audio_custom_shutdown();
     audio_shutdown();
     gfx_shutdown();
     network_shutdown(true, true, false, false);
@@ -264,12 +279,51 @@ void game_deinit(void) {
 void game_exit(void) {
     LOG_INFO("exiting cleanly");
     game_deinit();
+    #ifndef TARGET_WEB
     exit(0);
+    #endif
 }
 
+#ifdef TARGET_WEB
+// NEW STUFF! Sets up the canvas to recieve frames
+// copied (mostly) from sm64ex's web port
+static void em_main_loop(void) {
+}
+
+static void request_anim_frame(void (*func)(double time)) {
+    EM_ASM(requestAnimationFrame(function(time) {
+        dynCall("vd", $0, [time]);
+    }), func);
+}
+
+static void on_anim_frame(double time) {
+    static double target_time;
+
+    time *= 0.03; // milliseconds to frame count (33.333 ms -> 1)
+
+    if (time >= target_time + 10.0) {
+        // We are lagging 10 frames behind, probably due to coming back after inactivity,
+        // so reset, with a small margin to avoid potential jitter later.
+        target_time = time - 0.010;
+    }
+
+    for (int i = 0; i < 2; i++) {
+        // If refresh rate is 15 Hz or something we might need to generate two frames
+        if (time >= target_time) {
+            produce_one_frame();
+            target_time = target_time + 1.0;
+        }
+    }
+
+    if (gGameInited) // only continue if the init flag is still set
+        request_anim_frame(on_anim_frame);
+}
+#endif TARGET_WEB
+
 void* main_game_init(UNUSED void* arg) {
+    const char *gamedir = FS_BASEDIR;
     const char *userpath = gCLIOpts.savePath[0] ? gCLIOpts.savePath : sys_user_path();
-    fs_init(sys_ropaths, FS_BASEDIR, userpath);
+    fs_init(sys_ropaths, gamedir, userpath);
 
     if (gIsThreaded) { REFRESH_MUTEX(snprintf(gCurrLoadingSegment.str, 256, "Loading")); }
     dynos_gfx_init();
@@ -278,11 +332,6 @@ void* main_game_init(UNUSED void* arg) {
     configfile_load();
     configWindow.settings_changed = true;
     if (!djui_language_init(configLanguage)) { snprintf(configLanguage, MAX_CONFIG_STRING, "%s", ""); }
-
-    if (gCLIOpts.network != NT_SERVER) {
-        check_for_updates();
-    }
-
     dynos_packs_init();
     sync_objects_init_system();
 
@@ -291,25 +340,29 @@ void* main_game_init(UNUSED void* arg) {
     if (gIsThreaded) {
         REFRESH_MUTEX(
             gCurrLoadingSegment.percentage = 0;
-            snprintf(gCurrLoadingSegment.str, 256, "Starting Game");
+            snprintf(gCurrLoadingSegment.str, 256, "Starting game");
         );
     }
 
     // If coop_custom_palette_* values are not found in sm64config.txt, the custom palette config will use the default values (Mario's palette)
     // But if no preset is found, that means the current palette is a custom palette
-    // This is so terrible
     for (int i = 0; i <= PALETTE_PRESET_MAX; i++) {
         if (i == PALETTE_PRESET_MAX) {
             configCustomPalette = configPlayerPalette;
             configfile_save(configfile_name());
-        } else if (memcmp(&configPlayerPalette, &gPalettePresets[i], sizeof(struct PlayerPalette)) == 0) { break; }
+        } else if (memcmp(&configPlayerPalette, &gPalettePresets[i], sizeof(struct PlayerPalette)) == 0) {
+            break;
+        }
     }
+
+    if (configPlayerModel >= CT_MAX) { configPlayerModel = 0; }
 
     if (gCLIOpts.fullscreen == 1) { configWindow.fullscreen = true; }
     else if (gCLIOpts.fullscreen == 2) { configWindow.fullscreen = false; }
 
     if (gCLIOpts.playerName[0] != '\0') {
         snprintf(configPlayerName, MAX_PLAYER_STRING, "%s", gCLIOpts.playerName);
+        printf("\nCustom Playername (Start-Parameter): %s\n\n", configPlayerName);
     }
 
     if (!gGfxInited) {
@@ -324,25 +377,26 @@ void* main_game_init(UNUSED void* arg) {
 
     audio_init();
     sound_init();
-    bassh_init();
+    // CLEANSE THY BASS
+    //bassh_init();
     network_player_init();
+
+#ifdef EXTERNAL_DATA
+    // precache data if needed
+    if (configPrecacheRes) {
+        fprintf(stdout, "precaching data\n");
+        fflush(stdout);
+        gfx_precache_textures();
+    }
+#endif
 
     gGameInited = true;
 }
 
-extern void djui_panel_do_host(bool reconnecting, bool playSound);
 int main(int argc, char *argv[]) {
 
     // Handle terminal arguments
     if (!parse_cli_opts(argc, argv)) { return 0; }
-
-#if defined(_WIN32) || defined(_WIN64)
-    // Handle Windows console
-    if (!gCLIOpts.console) {
-        FreeConsole();
-    }
-
-#endif
 
     // Create the window straight away
     if (!gGfxInited) {
@@ -373,8 +427,6 @@ int main(int argc, char *argv[]) {
     djui_init_late();
     djui_console_message_dequeue();
 
-    show_update_popup();
-
     // Init network
     if (gCLIOpts.network == NT_CLIENT) {
         network_set_system(NS_SOCKET);
@@ -383,14 +435,22 @@ int main(int argc, char *argv[]) {
         configJoinPort = gCLIOpts.networkPort;
         network_init(NT_CLIENT, false);
     } else if (gCLIOpts.network == NT_SERVER) {
-        configNetworkSystem = NS_SOCKET;
+        network_set_system(NS_SOCKET);
         configHostPort = gCLIOpts.networkPort;
 
-        djui_panel_do_host(NULL, false);
+        // Horrible, hacky fix for mods that access marioObj straight away
+        // best fix: host with the standard main menu method
+        static struct Object sHackyObject = { 0 };
+        gMarioStates[0].marioObj = &sHackyObject;
+
+        network_init(NT_SERVER, false);
+        djui_panel_shutdown();
+        djui_panel_modlist_create(NULL);
     } else {
         network_init(NT_NONE, false);
     }
 
+    #ifndef TARGET_WEB
     // Main loop
     while (true) {
         debug_context_reset();
@@ -405,7 +465,16 @@ int main(int argc, char *argv[]) {
 #endif
         CTX_END(CTX_FRAME);
     }
+    #endif
 
-    bassh_deinit();
+    #ifdef TARGET_WEB
+    // Main loop (emscripten edition)
+    //Sets the main loop to do nothing, starts requesting frames
+    emscripten_set_main_loop(em_main_loop, 0, 0);
+    request_anim_frame(on_anim_frame);
+    #endif
+
+    // CLEANSE THY BASS
+    //bassh_deinit();
     return 0;
 }

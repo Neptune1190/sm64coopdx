@@ -12,7 +12,7 @@
 #ifdef DEVELOPMENT
 #include "dev/chat.h"
 #endif
-
+extern struct NametagsSettings gNametagsSettings;
 static enum ChatConfirmCommand sConfirming = CCC_NONE;
 static u8 sConfirmPlayerIndex = 0;
 

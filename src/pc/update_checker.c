@@ -3,7 +3,7 @@
 #include <windows.h>
 #include <wininet.h>
 #else
-#include <curl/curl.h>
+#include "curl.h"
 #endif
 
 #include "update_checker.h"

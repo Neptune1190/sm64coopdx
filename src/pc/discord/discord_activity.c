@@ -1,12 +1,11 @@
 #include "discord.h"
-#include "pc/pc_main.h"
 #include "pc/djui/djui.h"
 #include "pc/mods/mods.h"
 #include "pc/debuglog.h"
 #include "pc/utils/misc.h"
 #include "pc/djui/djui_panel_join_message.h"
 #ifdef COOPNET
-#include "pc/network/coopnet/coopnet.h"
+// #include "pc/network/coopnet/coopnet.h"
 #endif
 
 extern struct DiscordApplication app;
@@ -32,22 +31,22 @@ static void on_activity_join(UNUSED void* data, const char* secret) {
     }
 
 #ifdef COOPNET
-    // extract lobby ID
-    token = strtok(NULL, ":");
-    char* end;
-    u64 lobbyId = strtoull(token, &end, 10);
+    // // extract lobby ID
+    // token = strtok(NULL, ":");
+    // char* end;
+    // u64 lobbyId = strtoull(token, &end, 10);
 
-    // extract lobby password
-    token = strtok(NULL, ":");
-    if (token == NULL) { token = ""; }
+    // // extract lobby password
+    // token = strtok(NULL, ":");
+    // if (token == NULL) { token = ""; }
 
-    // join
-    if (gNetworkType != NT_NONE) {
-        network_shutdown(true, false, false, false);
-    }
-    sQueuedLobbyId = lobbyId;
-    snprintf(sQueuedLobbyPassword, 64, "%s", token);
-    sQueuedLobby = 2;
+    // // join
+    // if (gNetworkType != NT_NONE) {
+    //     network_shutdown(true, false, false, false);
+    // }
+    // sQueuedLobbyId = lobbyId;
+    // snprintf(sQueuedLobbyPassword, 64, "%s", token);
+    // sQueuedLobby = 2;
 #endif
 }
 
@@ -93,11 +92,6 @@ static void discord_populate_details(char* buffer, int bufferLength) {
 void discord_activity_update(void) {
     sCurActivity.type = DiscordActivityType_Playing;
 
-    strncpy(sCurActivity.assets.large_image, "characters", 128);
-    strncpy(sCurActivity.assets.large_text, "sm64coopdx Characters", 128);
-    strncpy(sCurActivity.assets.small_image, "icon", 128);
-    strncpy(sCurActivity.assets.small_text, "sm64coopdx Icon", 128);
-
     if (gNetworkType != NT_NONE && gNetworkSystem) {
         gNetworkSystem->get_lobby_id(sCurActivity.party.id, 128);
         gNetworkSystem->get_lobby_secret(sCurActivity.secrets.join, 128);
@@ -110,12 +104,12 @@ void discord_activity_update(void) {
         sCurActivity.party.size.max_size = 1;
     }
 
-    if (sCurActivity.party.size.current_size > 1 || configAmountofPlayers == 1) {
+    if (sCurActivity.party.size.current_size > 1) {
         strcpy(sCurActivity.state, "Playing!");
     } else if (gNetworkType == NT_SERVER) {
         strcpy(sCurActivity.state, "Waiting for players...");
     } else {
-        strcpy(sCurActivity.state, "In the menus.");
+        strcpy(sCurActivity.state, "In-game.");
         sCurActivity.party.size.current_size = 1;
         if (sCurActivity.party.size.max_size < 1) { sCurActivity.party.size.max_size = 1; }
     }
@@ -143,16 +137,16 @@ void discord_activity_update(void) {
 
 void discord_activity_update_check(void) {
 #ifdef COOPNET
-    if (sQueuedLobby > 0) {
-        if (--sQueuedLobby == 0) {
-            gCoopNetDesiredLobby = sQueuedLobbyId;
-            snprintf(gCoopNetPassword, 64, "%s", sQueuedLobbyPassword);
-            network_reset_reconnect_and_rehost();
-            network_set_system(NS_COOPNET);
-            network_init(NT_CLIENT, false);
-            djui_panel_join_message_create(NULL);
-        }
-    }
+    // if (sQueuedLobby > 0) {
+    //     if (--sQueuedLobby == 0) {
+    //         gCoopNetDesiredLobby = sQueuedLobbyId;
+    //         snprintf(gCoopNetPassword, 64, "%s", sQueuedLobbyPassword);
+    //         network_reset_reconnect_and_rehost();
+    //         network_set_system(NS_COOPNET);
+    //         network_init(NT_CLIENT, false);
+    //         djui_panel_join_message_create(NULL);
+    //     }
+    // }
 #endif
 
     if (gNetworkType == NT_NONE) { return; }

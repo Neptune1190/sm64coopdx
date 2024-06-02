@@ -28,7 +28,6 @@
 #include "game/level_geo.h"
 #include "menu/intro_geo.h"
 #include "game/ingame_menu.h"
-#include "game/first_person_cam.h"
 
 #ifdef DISCORD_SDK
 #include "pc/discord/discord.h"
@@ -69,21 +68,14 @@ enum NetworkSystemType sNetworkReconnectType = NS_SOCKET;
 
 struct ServerSettings gServerSettings = {
     .playerInteractions = PLAYER_INTERACTIONS_SOLID,
-    .bouncyLevelBounds = BOUNCY_LEVEL_BOUNDS_OFF,
     .playerKnockbackStrength = 25,
-    .skipIntro = FALSE,
-    .enableCheats = FALSE,
-    .bubbleDeath = TRUE,
-    .enablePlayersInLevelDisplay = TRUE,
-    .enablePlayerList = TRUE,
-    .headlessServer = FALSE,
-    .nametags = TRUE,
+    .skipIntro = 0,
+    .enableCheats = 0,
+    .bubbleDeath = 1,
+    .enablePlayersInLevelDisplay = 1,
+    .enablePlayerList = 1,
+    .headlessServer = 0,
     .maxPlayers = MAX_PLAYERS,
-};
-
-struct NametagsSettings gNametagsSettings = {
-    .showHealth = false,
-    .showSelfTag = false,
 };
 
 void network_set_system(enum NetworkSystemType nsType) {
@@ -92,7 +84,7 @@ void network_set_system(enum NetworkSystemType nsType) {
     switch (nsType) {
         case NS_SOCKET:  gNetworkSystem = &gNetworkSystemSocket; break;
 #ifdef COOPNET
-        case NS_COOPNET: gNetworkSystem = &gNetworkSystemCoopNet; break;
+        // case NS_COOPNET: gNetworkSystem = &gNetworkSystemCoopNet; break;
 #endif
         default: gNetworkSystem = &gNetworkSystemSocket; LOG_ERROR("Unknown network system: %d", nsType); break;
     }
@@ -115,24 +107,17 @@ bool network_init(enum NetworkType inNetworkType, bool reconnecting) {
 
     // set server settings
     gServerSettings.playerInteractions = configPlayerInteraction;
-    gServerSettings.bouncyLevelBounds = configCoopCompatibility ? 0 : configBouncyLevelBounds;
     gServerSettings.playerKnockbackStrength = configPlayerKnockbackStrength;
     gServerSettings.stayInLevelAfterStar = configStayInLevelAfterStar;
-    gServerSettings.skipIntro = gCLIOpts.skipIntro ? TRUE : configSkipIntro;
+    gServerSettings.skipIntro = configSkipIntro;
     gServerSettings.enableCheats = 0;
     gServerSettings.bubbleDeath = configBubbleDeath;
-    gServerSettings.enablePlayersInLevelDisplay = TRUE;
-    gServerSettings.enablePlayerList = TRUE;
-    gServerSettings.nametags = configCoopCompatibility ? FALSE : configNametags;
     gServerSettings.maxPlayers = configAmountofPlayers;
 #if defined(RAPI_DUMMY) || defined(WAPI_DUMMY)
     gServerSettings.headlessServer = (inNetworkType == NT_SERVER);
 #else
     gServerSettings.headlessServer = 0;
 #endif
-
-    gNametagsSettings.showHealth = false;
-    gNametagsSettings.showSelfTag = false;
 
     // initialize the network system
     gNetworkSentJoin = false;
@@ -448,9 +433,9 @@ void network_reconnect_begin(void) {
     sNetworkReconnectTimer = 2 * 30;
 
 #ifdef COOPNET
-    sNetworkReconnectType = (gNetworkSystem == &gNetworkSystemCoopNet)
-                          ? NS_COOPNET
-                          : NS_SOCKET;
+    // sNetworkReconnectType = (gNetworkSystem == &gNetworkSystemCoopNet)
+    //                       ? NS_COOPNET
+    //                       : NS_SOCKET;
 #else
     sNetworkReconnectType = NS_SOCKET;
 #endif
@@ -493,12 +478,12 @@ void network_rehost_begin(void) {
     sNetworkRehostTimer = 2;
 }
 
-extern void djui_panel_do_host(bool reconnecting, bool playSound);
 static void network_rehost_update(void) {
+    extern void djui_panel_do_host(bool reconnecting);
     if (sNetworkRehostTimer <= 0) { return; }
     if (--sNetworkRehostTimer != 0) { return; }
 
-    djui_panel_do_host(true, true);
+    djui_panel_do_host(true);
 }
 
 static void network_update_area_timer(void) {
@@ -521,9 +506,6 @@ static void network_update_area_timer(void) {
     //brokenClock = (skipClockCount > 0);
 #endif
     if (!brokenClock) {
-        if (network_check_singleplayer_pause()) {
-            gNetworkAreaTimerClock++;
-        }
         // update network area timer
         u32 desiredNAT = gNetworkAreaTimer + 1;
         gNetworkAreaTimer = (clock_elapsed_ticks() - gNetworkAreaTimerClock);
@@ -537,11 +519,11 @@ static void network_update_area_timer(void) {
 }
 
 #ifdef COOPNET
-void network_update_coopnet(void) {
-    if (gNetworkType != NT_NONE) { return; }
-    if (!ns_coopnet_is_connected()) { return; }
-    ns_coopnet_update();
-}
+// void network_update_coopnet(void) {
+//     if (gNetworkType != NT_NONE) { return; }
+//     if (!ns_coopnet_is_connected()) { return; }
+//     ns_coopnet_update();
+// }
 #endif
 
 void network_update(void) {
@@ -553,7 +535,7 @@ void network_update(void) {
     network_reconnect_update();
 
 #ifdef COOPNET
-    network_update_coopnet();
+    // network_update_coopnet();
 #endif
 
     // check for level loaded event
@@ -666,17 +648,9 @@ void network_shutdown(bool sendLeaving, bool exiting, bool popup, bool reconnect
     gLightingColor[0] = 255;
     gLightingColor[1] = 255;
     gLightingColor[2] = 255;
-    gVertexColor[0] = 255;
-    gVertexColor[1] = 255;
-    gVertexColor[2] = 255;
-    gFogColor[0] = 255;
-    gFogColor[1] = 255;
-    gFogColor[2] = 255;
-    gFogIntensity = 1;
     gOverrideBackground = -1;
     gOverrideEnvFx = -1;
     gRomhackCameraAllowCentering = TRUE;
-    gOverrideAllowToxicGasCamera = FALSE;
     gRomhackCameraAllowDpad = FALSE;
     camera_reset_overrides();
     dynos_mod_shutdown();
@@ -699,7 +673,7 @@ void network_shutdown(bool sendLeaving, bool exiting, bool popup, bool reconnect
     gDialogMinWidth = 0;
     gOverrideAllowToxicGasCamera = FALSE;
 
-    struct Controller* cnt = gPlayer1Controller;
+    struct Controller* cnt = gMarioStates[0].controller;
     cnt->rawStickX = 0;
     cnt->rawStickY = 0;
     cnt->stickX = 0;
@@ -710,10 +684,6 @@ void network_shutdown(bool sendLeaving, bool exiting, bool popup, bool reconnect
     cnt->extStickX = 0;
     cnt->extStickY = 0;
 
-    gFirstPersonCamera.enabled = false;
-    gFirstPersonCamera.fov = FIRST_PERSON_DEFAULT_FOV;
-    first_person_reset();
-
     extern void save_file_load_all(UNUSED u8 reload);
     save_file_load_all(TRUE);
     extern void save_file_set_using_backup_slot(bool usingBackupSlot);
@@ -721,8 +691,6 @@ void network_shutdown(bool sendLeaving, bool exiting, bool popup, bool reconnect
 
     extern s16 gMenuMode;
     gMenuMode = -1;
-
-    reset_window_title();
 
     djui_panel_shutdown();
     extern bool gDjuiInMainMenu;
